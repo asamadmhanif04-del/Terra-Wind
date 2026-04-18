@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-⬢ TERRA·WIND  —  Wind Rose Diagram Generator
+🧭 TERRA·WIND  —  Wind Rose Diagram Generator
 Run: python windrose_final.py
 """
 import sys, subprocess, io
@@ -18,7 +18,7 @@ if __name__ == "__main__" and not _in_streamlit():
     DEPS = [("streamlit", "streamlit"), ("matplotlib", "matplotlib"),
             ("numpy", "numpy"), ("pandas", "pandas"),
             ("reportlab", "reportlab"), ("openpyxl", "openpyxl"), ("Pillow", "PIL")]
-    print("\n  ⬢  TERRA·WIND  —  Wind Rose Generator\n  " + "─" * 40)
+    print("\n  🧭  TERRA·WIND  —  Wind Rose Generator\n  " + "─" * 40)
     for pkg, mod in DEPS:
         try:
             __import__(mod)
@@ -52,7 +52,7 @@ from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 
-st.set_page_config(page_title="TERRA·WIND", page_icon="⬢",
+st.set_page_config(page_title="TERRA·WIND", page_icon="🧭",
                    layout="wide", initial_sidebar_state="collapsed")
 
 # ══════════════════════════════════════════════════════════════════════
@@ -62,13 +62,24 @@ DIRS_16 = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
            "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
 C2D = {d: i * 22.5 for i, d in enumerate(DIRS_16)}
 
-SPD_BINS = [-0.001, 6, 25, 40, 60, 9999]
-SPD_LABELS = ["<6 km/h", "6–25 km/h", "25–40 km/h", "40–60 km/h", ">60 km/h"]
-TBL_COLS = ["6.0–25 km/h", "25–40 km/h", "40–60 km/h"]
-TBL_IDX = [1, 2, 3]
+T2_COLORS = ["#94a3b8", "#3b82f6", "#0ea5e9", "#10b981", "#f59e0b", "#f97316", "#ef4444"]
 
-T2_COLORS = ["#94a3b8", "#3b82f6", "#10b981", "#f59e0b", "#ef4444"]
-T2_NAMES = ["< 6 km/h (Calm)", "6–25 km/h", "25–40 km/h", "40–60 km/h", "> 60 km/h"]
+
+def get_unit_config(unit):
+    base_bins = [0.97, 4.08, 7.00, 11.08, 17.11, 21.58]
+    if unit == "knots":
+        b = base_bins
+    elif unit == "m/s":
+        b = [round(x * 0.514444, 2) for x in base_bins]
+    else:  # km/h
+        b = [round(x * 1.852, 2) for x in base_bins]
+
+    bins = [-0.001] + b + [9999.0]
+    tbl_cols = [f"{b[0]} - {b[1]}", f"{b[1]} - {b[2]}", f"{b[2]} - {b[3]}", f"{b[3]} - {b[4]}", f"{b[4]} - {b[5]}",
+                f">= {b[5]}"]
+    t2_names = [f"< {b[0]} (Calm)"] + tbl_cols
+    return bins, tbl_cols, t2_names
+
 
 # ── Theme definitions ──────────────────────────────────────────────────────────
 TH = {
@@ -115,7 +126,7 @@ _SS = dict(theme="dark", diagrams={}, freq=None, rwy1=None, rwy2=None,
            _file_bytes=None, _file_name=None, _cols=None,
            _file_rows=0, _file_loaded=False,
            _pdf_name="", _pdf_roll="", _pdf_site="", _pdf_logo=None,
-           _processing=False)
+           _processing=False, _tbl_cols=[], _t2_names=[], _unit="km/h")
 for k, v in _SS.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -181,12 +192,13 @@ button[title="Open sidebar"],button[title="Close sidebar"],
   color:{TXT}!important;
   -webkit-text-fill-color:{TXT}!important;
 }}
+
 .stButton>button, .stDownloadButton>button,
-button[data-testid], .ar-step-num,
-.ar-hero .ar-eyebrow{{
+button[data-testid], .ar-step-num {{
   color:#ffffff!important;
   -webkit-text-fill-color:#ffffff!important;
 }}
+
 .ar-lbl, .ar-sv, .ar-step-title, .ar-type-code,
 .ar-title em, .ar-eyebrow, .ar-chip,
 .ar-footer-brand, .ar-file-banner b,
@@ -585,6 +597,7 @@ div[data-testid="stAlert"] p{{
 .ar-freq-box{{
   background:{EBG};border:1px solid {T['brd_css']};
   border-radius:var(--rad);padding:1rem 1.2rem;margin:.5rem 0;
+  overflow-x: auto; 
 }}
 .ar-freq-hdr{{
   font-family:'Bebas Neue',cursive;font-size:1.15rem;letter-spacing:.12em;
@@ -607,6 +620,13 @@ div[data-testid="stAlert"] p{{
   padding:7px 10px;letter-spacing:.05em;font-size:.7rem;
   text-align:center;font-weight:700;
   border-bottom:2px solid {'rgba(16,185,129,0.3)' if dk else 'rgba(5,150,105,0.3)'};
+  white-space: nowrap; 
+}}
+.ar-tbl th.wrap-header {{
+  white-space: normal !important;
+  line-height: 1.4;
+  min-width: 130px;
+  vertical-align: middle;
 }}
 .ar-tbl th.dh{{
   background:{'#064e3b' if dk else '#022c22'}!important;
@@ -619,6 +639,7 @@ div[data-testid="stAlert"] p{{
   text-align:center;
   color:{ETXT}!important;-webkit-text-fill-color:{ETXT}!important;
   font-size:.73rem;
+  white-space: nowrap; 
 }}
 .ar-tbl td.dc{{
   font-weight:700;text-align:left;
@@ -844,7 +865,8 @@ def process_data(fb, fname, dc, sc, dfmt, su):
         df = None
         for enc in ("utf-8", "utf-8-sig", "latin-1", "cp1252"):
             try:
-                df = pd.read_csv(io.BytesIO(fb), encoding=enc, low_memory=False); break
+                df = pd.read_csv(io.BytesIO(fb), encoding=enc, low_memory=False);
+                break
             except Exception:
                 pass
         if df is None: raise ValueError("Cannot decode file.")
@@ -858,24 +880,25 @@ def process_data(fb, fname, dc, sc, dfmt, su):
         w["dg"] = w["dir"].astype(str).str.strip().str.upper().map(C2D)
     else:
         w["dg"] = pd.to_numeric(w["dir"], errors="coerce") % 360
-    w["kmh"] = pd.to_numeric(w["spd"], errors="coerce")
-    if su == "knots":
-        w["kmh"] *= 1.852
-    elif su == "m/s":
-        w["kmh"] *= 3.6
-    w = w.dropna(subset=["dg", "kmh"])
+
+    w["speed_val"] = pd.to_numeric(w["spd"], errors="coerce")
+    w = w.dropna(subset=["dg", "speed_val"])
     if len(w) == 0: raise ValueError("No valid rows after processing.")
+
+    bins, tbl_cols, t2_names = get_unit_config(su)
+
     w["sec"] = (((w["dg"] + 11.25) % 360) // 22.5).astype(int).clip(0, 15)
-    w["sc"] = pd.cut(w["kmh"], bins=SPD_BINS, labels=list(range(5))).astype(float).astype("Int64")
+    w["sc"] = pd.cut(w["speed_val"], bins=bins, labels=list(range(7))).astype(float).astype("Int64")
     total = len(w);
-    freq = np.zeros((16, 5))
+    freq = np.zeros((16, 7))
     for s in range(16):
-        for c in range(5):
+        for c in range(7):
             freq[s, c] = ((w.sec == s) & (w.sc == c)).sum() / total * 100
-    op = freq[:, 1] + freq[:, 2] + freq[:, 3]
+
+    op = freq[:, 1:].sum(axis=1)
     return freq, {"total": total, "calm": round(freq[:, 0].sum(), 1),
-                  "op": round(op.sum(), 1), "avg": round(w.kmh.mean(), 1),
-                  "max": round(w.kmh.max(), 1), "dom": DIRS_16[int(op.argmax())]}
+                  "op": round(op.sum(), 1), "avg": round(w.speed_val.mean(), 1),
+                  "max": round(w.speed_val.max(), 1), "dom": DIRS_16[int(op.argmax())]}, tbl_cols, t2_names
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -889,7 +912,7 @@ def rwy_cov(freq, hdg, cx):
     t = 0.
     for i in range(16):
         d = abs(((i * 22.5 - hdg + 180) % 360) - 180)
-        if d <= h or d >= 180 - h: t += freq[i, 1:4].sum()
+        if d <= h or d >= 180 - h: t += freq[i, 1:].sum()
     return min(t, 100.)
 
 
@@ -909,7 +932,7 @@ def comb_cov(freq, r1, r2, cx):
         a = i * 22.5;
         d1 = abs(((a - r1 + 180) % 360) - 180);
         d2 = abs(((a - r2 + 180) % 360) - 180)
-        if d1 <= h or d1 >= 180 - h or d2 <= h or d2 >= 180 - h: t += freq[i, 1:4].sum()
+        if d1 <= h or d1 >= 180 - h or d2 <= h or d2 >= 180 - h: t += freq[i, 1:].sum()
     return min(t, 100.)
 
 
@@ -922,51 +945,43 @@ def rwy_lbl(hdg):
 # ══════════════════════════════════════════════════════════════════════
 #  FREQUENCY TABLE HTML
 # ══════════════════════════════════════════════════════════════════════
-def freq_table_html(freq, T):
-    note = (f'Calm (&lt;6 km/h) = {freq[:, 0].sum():.1f}%  ·  '
-            f'Strong (&gt;60 km/h) = {freq[:, 4].sum():.1f}%  ·  '
-            f'Operational (6–60 km/h) = {sum(freq[:, j].sum() for j in TBL_IDX):.1f}%')
+def freq_table_html(freq, T, tbl_cols, unit):
+    note = (f'Calm (&lt;{tbl_cols[0].split(" - ")[0]} {unit}) = {freq[:, 0].sum():.1f}%  ·  '
+            f'Strong (&gt;{tbl_cols[-1].split("= ")[-1]} {unit}) = {freq[:, 6].sum():.1f}%  ·  '
+            f'Operational = {freq[:, 1:].sum():.1f}%')
     hdr = (f'<tr><th class="dh" rowspan="2">Direction</th>'
-           f'<th colspan="3">Duration of Wind (%)</th>'
-           f'<th rowspan="2">Total % of time wind blew<br>between 6.0 to 60 km/h</th></tr>'
+           f'<th colspan="6">Duration of Wind (%)</th>'
+           f'<th rowspan="2" class="wrap-header">Total % of time wind blew<br>in Operational<br>Range</th></tr>'
            f'<tr>'
-           f'<th>{TBL_COLS[0]}</th>'
-           f'<th>{TBL_COLS[1]}</th>'
-           f'<th>{TBL_COLS[2]}</th>'
+           f'<th>{tbl_cols[0]}</th><th>{tbl_cols[1]}</th><th>{tbl_cols[2]}</th>'
+           f'<th>{tbl_cols[3]}</th><th>{tbl_cols[4]}</th><th>{tbl_cols[5]}</th>'
            f'</tr>')
     rows = ""
     for i, d in enumerate(DIRS_16):
-        c1 = freq[i, 1];
-        c2 = freq[i, 2];
-        c3 = freq[i, 3];
-        tot = c1 + c2 + c3
-        rows += (f'<tr><td class="dc">{d}</td>'
-                 f'<td>{c1:.1f}</td><td>{c2:.1f}</td><td>{c3:.1f}</td>'
-                 f'<td>{tot:.1f}</td></tr>')
-    t1 = freq[:, 1].sum();
-    t2 = freq[:, 2].sum();
-    t3 = freq[:, 3].sum();
-    tt = t1 + t2 + t3
-    rows += (f'<tr class="trow"><td class="dc">TOTAL</td>'
-             f'<td>{t1:.1f}</td><td>{t2:.1f}</td><td>{t3:.1f}</td>'
-             f'<td>{tt:.1f}</td></tr>')
+        cols_html = "".join([f"<td>{freq[i, j]:.1f}</td>" for j in range(1, 7)])
+        tot = freq[i, 1:].sum()
+        rows += (f'<tr><td class="dc">{d}</td>{cols_html}<td>{tot:.1f}</td></tr>')
+
+    t_html = "".join([f"<td>{freq[:, j].sum():.1f}</td>" for j in range(1, 7)])
+    tt = freq[:, 1:].sum()
+    rows += (f'<tr class="trow"><td class="dc">TOTAL</td>{t_html}<td>{tt:.1f}</td></tr>')
     return (f'<div class="ar-freq-box">'
-            f'<div class="ar-freq-hdr">Frequency Table</div>'
+            f'<div class="ar-freq-hdr">Frequency Table ({unit})</div>'
             f'<div class="ar-freq-note">{note}</div>'
             f'<table class="ar-tbl">{hdr}{rows}</table>'
             f'</div>')
 
 
-def freq_to_csv(freq):
+def freq_to_csv(freq, tbl_cols):
     rows = []
     for i, d in enumerate(DIRS_16):
         r = {"Direction": d}
-        for j, lbl in enumerate(TBL_COLS): r[lbl] = round(freq[i, TBL_IDX[j]], 4)
-        r["Total % (6.0-60 km/h)"] = round(sum(freq[i, j] for j in TBL_IDX), 4)
+        for j, lbl in enumerate(tbl_cols): r[lbl] = round(freq[i, j + 1], 4)
+        r["Total % (Operational)"] = round(freq[i, 1:].sum(), 4)
         rows.append(r)
     t = {"Direction": "TOTAL"}
-    for j, lbl in enumerate(TBL_COLS): t[lbl] = round(freq[:, TBL_IDX[j]].sum(), 4)
-    t["Total % (6.0-60 km/h)"] = round(sum(freq[:, j].sum() for j in TBL_IDX), 4)
+    for j, lbl in enumerate(tbl_cols): t[lbl] = round(freq[:, j + 1].sum(), 4)
+    t["Total % (Operational)"] = round(freq[:, 1:].sum(), 4)
     rows.append(t)
     return pd.DataFrame(rows).to_csv(index=False).encode("utf-8")
 
@@ -1010,13 +1025,13 @@ def _refcircles(ax, mv):
         ax.text(np.radians(10), rv, f"{rv:.1f}%", fontsize=6, color="#6688aa", ha="left", va="bottom")
 
 
-def render_t1s(freq, theme):
+def render_t1s(freq, theme, unit):
     T = TH[theme];
-    dp = freq[:, 1] + freq[:, 2] + freq[:, 3];
+    dp = freq[:, 1:].sum(axis=1);
     N = 16
     th = np.linspace(0, 2 * np.pi, N, endpoint=False);
     mv = max(dp.max(), 1.)
-    fig, ax = _polar("TYPE I  —  SINGLE RUNWAY\n", theme)
+    fig, ax = _polar(f"TYPE I  —  SINGLE RUNWAY\n({unit})", theme)
     _refcircles(ax, mv)
     ax.fill(th, dp, color=T["m_pfill"], alpha=0.35, zorder=2)
     ax.plot(np.append(th, th[0]), np.append(dp, dp[0]), color=T["m_poly"], lw=2.4, alpha=0.95, zorder=3)
@@ -1031,17 +1046,18 @@ def render_t1s(freq, theme):
         plt.Line2D([0], [0], color=T["m_poly"], lw=2.4, label="Polygon outline"),
         plt.Line2D([0], [0], marker='o', color=T["m_poly"], lw=0, markersize=5.5, label="Direction value"),
     ])
+
     plt.tight_layout(rect=[0, .07, 1, .97]);
     return _png(fig)
 
 
-def render_t1m(freq, theme):
+def render_t1m(freq, theme, unit):
     T = TH[theme];
-    dp = freq[:, 1] + freq[:, 2] + freq[:, 3];
+    dp = freq[:, 1:].sum(axis=1);
     N = 16
     th = np.linspace(0, 2 * np.pi, N, endpoint=False);
     mv = max(dp.max(), 1.)
-    fig, ax = _polar("TYPE I  —  MULTI RUNWAY\n", theme)
+    fig, ax = _polar(f"TYPE I  —  MULTI RUNWAY\n({unit})", theme)
     _refcircles(ax, mv)
     ax.fill(th, dp, color=T["m_pfill"], alpha=0.32, zorder=2)
     ax.plot(np.append(th, th[0]), np.append(dp, dp[0]), color=T["m_poly"], lw=2.4, alpha=0.92, zorder=3)
@@ -1055,48 +1071,51 @@ def render_t1m(freq, theme):
         plt.Line2D([0], [0], color=T["m_poly"], lw=2.4, label="Polygon outline"),
         plt.Line2D([0], [0], marker='o', color=T["m_poly"], lw=0, markersize=5.5, label="Direction value"),
     ])
+
     plt.tight_layout(rect=[0, .07, 1, .97]);
     return _png(fig)
 
 
-def render_t2s(freq, theme):
+def render_t2s(freq, theme, t2_names, unit):
     T = TH[theme];
     N = 16
     th = np.linspace(0, 2 * np.pi, N, endpoint=False);
     w = 2 * np.pi / N * .80
-    fig, ax = _polar("TYPE II  —  SINGLE RUNWAY\n", theme)
+    fig, ax = _polar(f"TYPE II  —  SINGLE RUNWAY\n({unit})", theme)
     bot = np.zeros(N)
-    for s in range(5):
+    for s in range(7):
         ax.bar(th, freq[:, s], width=w, bottom=bot,
                color=T2_COLORS[s], edgecolor="#ffffff", lw=0.45, alpha=0.93,
-               label=T2_NAMES[s], zorder=3)
+               label=t2_names[s], zorder=3)
         bot += freq[:, s]
     dom = int(bot.argmax())
     ax.text(th[dom], bot[dom] * 1.10, f"{bot[dom]:.1f}%", fontsize=8,
             color="#0d2244", ha="center", va="bottom", fontweight="bold")
     ax.set_ylim(0, bot.max() * 1.22 or 1)
-    _leg(ax, [mpatches.Patch(color=T2_COLORS[i], label=T2_NAMES[i]) for i in range(5)])
+    _leg(ax, [mpatches.Patch(color=T2_COLORS[i], label=t2_names[i]) for i in range(7)])
+
     plt.tight_layout(rect=[0, .09, 1, .97]);
     return _png(fig)
 
 
-def render_t2m(freq, theme):
+def render_t2m(freq, theme, t2_names, unit):
     T = TH[theme];
     N = 16
     th = np.linspace(0, 2 * np.pi, N, endpoint=False);
     w = 2 * np.pi / N * .80
-    fig, ax = _polar("TYPE II  —  MULTI RUNWAY\n", theme)
+    fig, ax = _polar(f"TYPE II  —  MULTI RUNWAY\n({unit})", theme)
     bot = np.zeros(N)
-    for s in range(5):
+    for s in range(7):
         ax.bar(th, freq[:, s], width=w, bottom=bot,
                color=T2_COLORS[s], edgecolor="#ffffff", lw=0.45, alpha=0.93,
-               label=T2_NAMES[s], zorder=3)
+               label=t2_names[s], zorder=3)
         bot += freq[:, s]
     dom = int(bot.argmax())
     ax.text(th[dom], bot[dom] * 1.10, f"{bot[dom]:.1f}%", fontsize=8,
             color="#0d2244", ha="center", va="bottom", fontweight="bold")
     ax.set_ylim(0, bot.max() * 1.22 or 1)
-    _leg(ax, [mpatches.Patch(color=T2_COLORS[i], label=T2_NAMES[i]) for i in range(5)])
+    _leg(ax, [mpatches.Patch(color=T2_COLORS[i], label=t2_names[i]) for i in range(7)])
+
     plt.tight_layout(rect=[0, .10, 1, .97]);
     return _png(fig)
 
@@ -1206,7 +1225,7 @@ def main():
         TRANSPORTATION ENGINEERING II  ·  RUNWAY ORIENTATION WEB
         <span class="ar-dot"></span>
       </div>
-      <div class="ar-title">&#9672;&nbsp;TERRA <em>WIND</em></div>
+      <div class="ar-title">🧭&nbsp;TERRA <em>WIND</em></div>
       <p class="ar-tagline">
         𝚃𝚑𝚒𝚜 𝚝𝚘𝚘𝚕 𝚐𝚎𝚗𝚎𝚛𝚊𝚝𝚎𝚜 𝚠𝚒𝚗𝚍 𝚛𝚘𝚜𝚎 𝚍𝚒𝚊𝚐𝚛𝚊𝚖𝚜 𝚝𝚘 𝚊𝚗𝚊𝚕𝚢𝚣𝚎 𝚠𝚒𝚗𝚍 𝚙𝚊𝚝𝚝𝚎𝚛𝚗𝚜 𝚠𝚒𝚝𝚑 𝚙𝚛𝚎𝚌𝚒𝚜𝚒𝚘𝚗𝙸𝚝 𝚑𝚎𝚕𝚙𝚜 𝚍𝚎𝚝𝚎𝚛𝚖𝚒𝚗𝚎 𝚘𝚙𝚝𝚒𝚖𝚊𝚕 𝚛𝚞𝚗𝚠𝚊𝚢 𝚘𝚛𝚒𝚎𝚗𝚝𝚊𝚝𝚒𝚘𝚗 𝚋𝚢 𝚟𝚒𝚜𝚞𝚊𝚕𝚒𝚣𝚒𝚗𝚐 𝚍𝚒𝚛𝚎𝚌𝚝𝚒𝚘𝚗 𝚊𝚗𝚍 𝚜𝚙𝚎𝚎𝚍 𝚍𝚒𝚜𝚝𝚛𝚒𝚋𝚞𝚝𝚒𝚘𝚗. 𝙳𝚎𝚜𝚒𝚐𝚗𝚎𝚍 𝚏𝚘𝚛 𝚊𝚌𝚌𝚞𝚛𝚊𝚌𝚢, 𝚎𝚏𝚏𝚒𝚌𝚒𝚎𝚗𝚌𝚢, 𝚊𝚗𝚍 𝚎𝚊𝚜𝚎 𝚘𝚏 𝚞𝚜𝚎 𝚒𝚗 𝚊𝚟𝚒𝚊𝚝𝚒𝚘𝚗 𝚙𝚕𝚊𝚗𝚗𝚒𝚗𝚐.
       </p>
@@ -1365,7 +1384,12 @@ def main():
             cx_s = st.selectbox("Crosswind Limit",
                                 ["10.5 kt (19.4 km/h) — Light", "13 kt (24.1 km/h) — Medium",
                                  "20 kt (37.0 km/h) — Heavy"], key="cxs")
-            cxlim = float(cx_s.split("(")[1].split()[0])
+            if spd_unit == "knots":
+                cxlim = float(cx_s.split(" ")[0])
+            elif spd_unit == "km/h":
+                cxlim = float(cx_s.split("(")[1].split(" ")[0])
+            else:
+                cxlim = float(cx_s.split(" ")[0]) * 0.514444
         with rw2:
             auto = st.checkbox("Auto-detect runways", value=True, key="auto")
         with rw3:
@@ -1436,7 +1460,8 @@ def main():
             st.session_state['_pdf_site'] = stu_site or ""
             if logo_file is not None:
                 try:
-                    st.session_state['_pdf_logo'] = logo_file.read(); logo_file.seek(0)
+                    st.session_state['_pdf_logo'] = logo_file.read();
+                    logo_file.seek(0)
                 except:
                     st.session_state['_pdf_logo'] = None
             else:
@@ -1445,7 +1470,7 @@ def main():
             ph = st.empty()
             ph.markdown(rwy_progress(0, "LOADING DATA"), unsafe_allow_html=True)
             try:
-                freq, stats = process_data(
+                freq, stats, tbl_cols, t2_names = process_data(
                     st.session_state._file_bytes, st.session_state._file_name,
                     dir_col, spd_col, dir_fmt, spd_unit)
             except ValueError as e:
@@ -1467,10 +1492,10 @@ def main():
             ph.markdown(rwy_progress(25, "RUNWAY HEADING RESOLVED"), unsafe_allow_html=True)
             tnow = st.session_state.theme
             diags = {}
-            rmap = {"t1s": lambda: render_t1s(freq, tnow),
-                    "t1m": lambda: render_t1m(freq, tnow),
-                    "t2s": lambda: render_t2s(freq, tnow),
-                    "t2m": lambda: render_t2m(freq, tnow)}
+            rmap = {"t1s": lambda: render_t1s(freq, tnow, spd_unit),
+                    "t1m": lambda: render_t1m(freq, tnow, spd_unit),
+                    "t2s": lambda: render_t2s(freq, tnow, t2_names, spd_unit),
+                    "t2m": lambda: render_t2m(freq, tnow, t2_names, spd_unit)}
             lmap = {"t1s": "TYPE I SINGLE", "t1m": "TYPE I MULTI",
                     "t2s": "TYPE II SINGLE", "t2m": "TYPE II MULTI"}
             ts = sum(sel.values());
@@ -1495,6 +1520,9 @@ def main():
             st.session_state.rwy2 = r2
             st.session_state.stats = stats;
             st.session_state.cxlim = cxlim
+            st.session_state._tbl_cols = tbl_cols
+            st.session_state._t2_names = t2_names
+            st.session_state._unit = spd_unit
             st.session_state.ready = True
             st.success(f" {len(diags)} Diagram(s) Generated!")
 
@@ -1509,7 +1537,7 @@ def main():
         c1 = rwy_cov(freq, r1, cx);
         c2 = rwy_cov(freq, r2, cx)
         cc = comb_cov(freq, r1, r2, cx);
-        icao = cc >= 95.
+        icao = (cc + stats["calm"]) >= 95.
 
         st.markdown('<div class="ar-hr"></div>', unsafe_allow_html=True)
         st.markdown('<div class="ar-lbl">Analysis Results</div>', unsafe_allow_html=True)
@@ -1517,9 +1545,9 @@ def main():
         st.markdown(
             '<div class="ar-stats">'
             + sc(f"{stats['total']:,}", "Total Obs.")
-            + sc(f"{stats['calm']:.1f}%", "Calm <6")
-            + sc(f"{stats['op']:.1f}%", "6–60 km/h")
-            + sc(f"{stats['avg']:.0f}", "Avg km/h")
+            + sc(f"{stats['calm']:.1f}%", "Calm")
+            + sc(f"{stats['op']:.1f}%", f"Operational ({st.session_state._unit})")
+            + sc(f"{stats['avg']:.0f}", f"Avg {st.session_state._unit}")
             + sc(stats['dom'], "Dominant Dir.")
             + sc(f"{cc:.1f}%", "Coverage")
             + '</div>', unsafe_allow_html=True)
@@ -1530,8 +1558,8 @@ def main():
           &#9992; <b>{rwy_lbl(r1)}</b>: {c1:.1f}%
           &nbsp;&middot;&nbsp; &#9992; <b>{rwy_lbl(r2)}</b>: {c2:.1f}%
           &nbsp;&middot;&nbsp; Combined: <b>{cc:.1f}%</b>
-          &nbsp;&middot;&nbsp; CW Limit: <b>{cx:.1f} km/h</b>
-          &nbsp;&middot;&nbsp; ICAO &ge;95%: {badge}
+          &nbsp;&middot;&nbsp; CW Limit: <b>{cx:.1f} {st.session_state._unit}</b>
+          &nbsp;&middot;&nbsp; ICAO &ge;95% (Inc. Calm): {badge}
         </div>""", unsafe_allow_html=True)
 
         tog_lbl = "▲ Hide Frequency Table" if st.session_state.show_table else "▼ Show Frequency Table"
@@ -1542,12 +1570,13 @@ def main():
         st.markdown('</div>', unsafe_allow_html=True)
 
         if st.session_state.show_table:
-            st.markdown(freq_table_html(freq, T), unsafe_allow_html=True)
+            st.markdown(freq_table_html(freq, T, st.session_state._tbl_cols, st.session_state._unit),
+                        unsafe_allow_html=True)
             ec1, ec2 = st.columns([2, 3])
             with ec1:
                 st.download_button(
                     label="⬇  Export Frequency Table CSV",
-                    data=freq_to_csv(freq),
+                    data=freq_to_csv(freq, st.session_state._tbl_cols),
                     file_name="wind_frequency_table.csv",
                     mime="text/csv",
                     key="csv_dl")
@@ -1589,7 +1618,7 @@ def main():
     # ── FOOTER ────────────────────────────────────────────────────
     st.markdown(f"""
     <div class="ar-footer">
-      <div class="ar-footer-brand">&#9672; TERRA&middot;WIND</div>
+      <div class="ar-footer-brand">🧭 TERRA&middot;WIND</div>
       <div class="ar-footer-line">Wind Rose Diagram Generator &nbsp;&middot;&nbsp; Ned University Karachi</div>
       <div style="font-family:'Bebas Neue',cursive;font-size:.88rem;
            letter-spacing:.2em;color:{T['acc']};margin:.7rem 0 .3rem;">WEB BY: ABDUL SAMAD</div>
